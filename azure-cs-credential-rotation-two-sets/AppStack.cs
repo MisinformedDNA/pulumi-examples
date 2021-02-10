@@ -14,42 +14,42 @@ class AppStack : Stack
     public AppStack()
     {
         var config = new Config();
-        var resourceGroupNameParam = config.Require("resourceGroupNameParam");
-        var resourceNamePrefixParam = config.Get("resourceNamePrefixParam");
+        var resourceGroupName = config.Get("resourceGroupName") ?? "credrotate2";
+        var resourceNamePrefixParam = config.Get("resourceNamePrefix") ?? resourceGroupName;
         var clientConfig = Output.Create(GetClientConfig.InvokeAsync());
         var tenantId = clientConfig.Apply(c => c.TenantId);
 
-        var (resourceGroup, vault) = AddInitalResources(resourceGroupNameParam, resourceNamePrefixParam, tenantId);
+        var (vault, resourceGroup) = AddInitalResources(resourceGroupName, resourceNamePrefixParam, tenantId);
 
         new FunctionStack(vault, resourceGroup);
     }
 
-    private static (ResourceGroup resourceGroup, Vault vault) AddInitalResources(string resourceGroupNameParam, string? resourceNamePrefixParam, Output<string> tenantId)
+    private static (Vault, ResourceGroup) AddInitalResources(string resourceGroupName, string? resourceNamePrefix, Output<string> tenantId)
     {
         var location = "CentralUS";
-        var resourceGroupVar = new ResourceGroup("resourceGroup", new ResourceGroupArgs { ResourceGroupName = resourceGroupNameParam, Location = location });
+        var resourceGroup = new ResourceGroup("resourceGroup", new ResourceGroupArgs { ResourceGroupName = resourceGroupName, Location = location });
 
-        var resourceNamePrefix = resourceNamePrefixParam is string rnpp ? Output.Create(rnpp) : resourceGroupVar.Name;
+        resourceNamePrefix ??= resourceGroupName;
 
-        _ = new StorageAccount("storageAccount", new StorageAccountArgs
+        _ = new StorageAccount("appStorageAccount", new StorageAccountArgs
         {
             AccountName = Output.Format($"{resourceNamePrefix}storage"),
             Kind = "Storage",
             Location = location,
-            ResourceGroupName = resourceGroupNameParam,
+            ResourceGroupName = resourceGroup.Name,
             Sku = new Storage.Inputs.SkuArgs { Name = "Standard_LRS" },
         });
 
-        _ = new StorageAccount("storageAccount2", new StorageAccountArgs
+        _ = new StorageAccount("appStorageAccount2", new StorageAccountArgs
         {
             AccountName = Output.Format($"{resourceNamePrefix}storage2"),
             Kind = "Storage",
             Location = location,
-            ResourceGroupName = resourceGroupNameParam,
+            ResourceGroupName = resourceGroup.Name,
             Sku = new Storage.Inputs.SkuArgs { Name = "Standard_LRS" },
         });
 
-        var vaultResource = new Vault("vaultResource", new VaultArgs
+        var vaultResource = new Vault("vault", new VaultArgs
         {
             Location = location,
             Properties = new VaultPropertiesArgs
@@ -65,10 +65,10 @@ class AppStack : Stack
                 },
                 TenantId = tenantId,
             },
-            ResourceGroupName = resourceGroupNameParam,
+            ResourceGroupName = resourceGroup.Name,
             VaultName = Output.Format($"{resourceNamePrefix}-kv"),
         });
 
-        return (resourceGroupVar, vaultResource);
+        return (vaultResource, resourceGroup);
     }
 }
