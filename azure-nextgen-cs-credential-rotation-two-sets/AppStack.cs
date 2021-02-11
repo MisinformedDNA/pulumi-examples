@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Pulumi;
 using Pulumi.AzureNextGen.Authorization.Latest;
@@ -13,8 +14,7 @@ using AzureNextGen = Pulumi.AzureNextGen;
 using KeyVault = Pulumi.AzureNextGen.KeyVault.Latest;
 using Storage = Pulumi.AzureNextGen.Storage.Latest;
 
-
-class AppStack : Stack
+internal class AppStack : Stack
 {
     public AppStack()
     {
@@ -24,19 +24,19 @@ class AppStack : Stack
         var clientConfig = Output.Create(GetClientConfig.InvokeAsync());
         var tenantId = clientConfig.Apply(c => c.TenantId);
 
-        var (vault, resourceGroup) = AddInitalResources(resourceGroupName, resourceNamePrefixParam, tenantId);
+        var (vault, resourceGroup, storageAccount1, storageAccount2) = AddInitalResources(resourceGroupName, resourceNamePrefixParam, tenantId);
 
-        AddRotationFunction(vault, resourceGroup);
+        AddRotationFunction(vault, resourceGroup, storageAccount1);
     }
 
-    private static (Vault, ResourceGroup) AddInitalResources(string resourceGroupName, string? resourceNamePrefix, Output<string> tenantId)
+    private static (Vault, ResourceGroup, StorageAccount, StorageAccount) AddInitalResources(string resourceGroupName, string? resourceNamePrefix, Output<string> tenantId)
     {
         var location = "CentralUS";
         var resourceGroup = new ResourceGroup("resourceGroup", new ResourceGroupArgs { ResourceGroupName = resourceGroupName, Location = location });
 
         resourceNamePrefix ??= resourceGroupName;
 
-        _ = new StorageAccount("appStorageAccount", new StorageAccountArgs
+        var storageAccount1 = new StorageAccount("appStorageAccount", new StorageAccountArgs
         {
             AccountName = Output.Format($"{resourceNamePrefix}storage"),
             Kind = "Storage",
@@ -45,7 +45,7 @@ class AppStack : Stack
             Sku = new Storage.Inputs.SkuArgs { Name = "Standard_LRS" },
         });
 
-        _ = new StorageAccount("appStorageAccount2", new StorageAccountArgs
+        var storageAccount2 = new StorageAccount("appStorageAccount2", new StorageAccountArgs
         {
             AccountName = Output.Format($"{resourceNamePrefix}storage2"),
             Kind = "Storage",
@@ -74,14 +74,14 @@ class AppStack : Stack
             VaultName = Output.Format($"{resourceNamePrefix}-kv"),
         });
 
-        return (vault, resourceGroup);
+        return (vault, resourceGroup, storageAccount1, storageAccount2);
     }
 
-    private static void AddRotationFunction(Vault keyVault, ResourceGroup resourceGroup)
+    private static void AddRotationFunction(Vault keyVault, ResourceGroup resourceGroup, StorageAccount storageAccount)
     {
         var config = new Config();
-        var resourceGroupNameParam = config.Get("resourceGroupName") ?? "credrotate2";
-        var functionAppNameParam = config.Get("functionAppNameParam") ?? $"{resourceGroupNameParam}-storagekey-rotation-fnapp";
+        var resourceGroupName = config.Get("resourceGroupName") ?? "credrotate2";
+        var functionAppNameParam = config.Get("functionAppNameParam") ?? $"{resourceGroupName}-storagekey-rotation-fnapp";
 
         var appServicePlanType = config.Get("appServicePlanType") ?? "Consumption Plan";
         var appServiceSku = appServicePlanType == "Consumption Plan" ? "Y1" : "P1V2";
@@ -90,7 +90,7 @@ class AppStack : Stack
         {
             Location = resourceGroup.Location,
             RequestSource = "IbizaWebAppExtensionCreate",
-            ResourceGroupName = resourceGroupNameParam,
+            ResourceGroupName = resourceGroupName,
             ResourceName = functionAppNameParam,
             Kind = "web",
             ApplicationType = "web",
@@ -98,54 +98,48 @@ class AppStack : Stack
             {
             },
         });
+
         var secretNameParam = config.Get("secretNameParam") ?? "storageKey";
         var eventSubscriptionNameVar = $"{functionAppNameParam}-{secretNameParam}";
 
         var prefix = new RandomString("randomPrefix", new RandomStringArgs { Special = false, Length = 13, Upper = false }).Result;
 
         var functionStorageAccountNameVar = Output.Format($"{prefix}fnappstrg");
-        var keyVaultNameParam = config.Get("keyVaultNameParam") ?? $"{resourceGroupNameParam}-kv";
-        var keyVaultRGParam = config.Get("keyVaultRGParam") ?? resourceGroupNameParam;
+        var keyVaultNameParam = config.Get("keyVaultNameParam") ?? $"{resourceGroupName}-kv";
+        var keyVaultRGParam = config.Get("keyVaultRGParam") ?? resourceGroupName;
 
-        var repoURLParam = config.Get("repoURLParam") ?? "https://github.com/Azure-Samples/KeyVault-Rotation-StorageAccountKey-PowerShell.git";
+        var repoURLParam = config.Get("repoURLParam") ?? "https://github.com/MisinformedDNA/keyvault-rotation-storageaccountkey-powershell/" ?? "https://github.com/Azure-Samples/KeyVault-Rotation-StorageAccountKey-PowerShell.git";
         var serverfarmResource = new AzureNextGen.Web.V20180201.AppServicePlan("serverfarmResource", new AzureNextGen.Web.V20180201.AppServicePlanArgs
         {
             Location = resourceGroup.Location,
-            Name = $"{resourceGroupNameParam}-rotation-fnapp-plan",
-            ResourceGroupName = resourceGroupNameParam,
+            Name = $"{resourceGroupName}-rotation-fnapp-plan",
+            ResourceGroupName = resourceGroupName,
             Sku = new AzureNextGen.Web.V20180201.Inputs.SkuDescriptionArgs
             {
                 Name = appServiceSku,
             },
         });
 
-        var storageAccountNameParam = config.Get("storageAccountNameParam") ?? $"{resourceGroupNameParam}storage";
-        var storageAccountRGParam = config.Get("storageAccountRGParam") ?? resourceGroupNameParam;
-        var storageAccountResource = new StorageAccount("storageAccountResource", new StorageAccountArgs
+        var functionAppStorage = new StorageAccount("functionApp-storage", new StorageAccountArgs
         {
             AccountName = functionStorageAccountNameVar,
             Kind = "Storage",
             Location = resourceGroup.Location,
-            ResourceGroupName = resourceGroupNameParam,
+            ResourceGroupName = resourceGroupName,
             Sku = new Storage.Inputs.SkuArgs
             {
                 Name = "Standard_LRS",
             },
         });
 
-        var storageAccountKey = storageAccountResource.Name.Apply(s =>
-        {
-            var keys = Output.Create(ListStorageAccountKeys.InvokeAsync(new ListStorageAccountKeysArgs { AccountName = s, ResourceGroupName = resourceGroupNameParam }));
-            return keys.Apply(k => k.Keys[0].Value);
-        });
-
+        var functionAppStorageKey = GetFirstStorageAccountKey(functionAppStorage, resourceGroupName);
         var functionApp = new WebApp("functionApp", new WebAppArgs
         {
             Enabled = true,
             Kind = "functionapp",
             Location = resourceGroup.Location,
             Name = functionAppNameParam,
-            ResourceGroupName = resourceGroupNameParam,
+            ResourceGroupName = resourceGroupName,
             ServerFarmId = serverfarmResource.Id,
             Identity = new AzureNextGen.Web.Latest.Inputs.ManagedServiceIdentityArgs { Type = AzureNextGen.Web.Latest.ManagedServiceIdentityType.SystemAssigned },
             SiteConfig = new AzureNextGen.Web.Latest.Inputs.SiteConfigArgs
@@ -155,7 +149,7 @@ class AppStack : Stack
                     new AzureNextGen.Web.Latest.Inputs.NameValuePairArgs
                     {
                         Name = "AzureWebJobsStorage",
-                        Value = Output.Format($"DefaultEndpointsProtocol=https;AccountName={functionStorageAccountNameVar};AccountKey={storageAccountKey}"),
+                        Value = Output.Format($"DefaultEndpointsProtocol=https;AccountName={functionStorageAccountNameVar};AccountKey={functionAppStorageKey}"),
                     },
                     new AzureNextGen.Web.Latest.Inputs.NameValuePairArgs
                     {
@@ -170,7 +164,7 @@ class AppStack : Stack
                     new AzureNextGen.Web.Latest.Inputs.NameValuePairArgs
                     {
                         Name = "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
-                        Value = Output.Format($"DefaultEndpointsProtocol=https;AccountName={functionStorageAccountNameVar};EndpointSuffix=core.windows.net;AccountKey={storageAccountKey}"),
+                        Value = Output.Format($"DefaultEndpointsProtocol=https;AccountName={functionStorageAccountNameVar};EndpointSuffix=core.windows.net;AccountKey={functionAppStorageKey}"),
                     },
                     new AzureNextGen.Web.Latest.Inputs.NameValuePairArgs
                     {
@@ -198,34 +192,54 @@ class AppStack : Stack
                 RepoUrl = repoURLParam,
                 Branch = "main",
                 IsManualIntegration = true,
-                ResourceGroupName = resourceGroupNameParam,
+                ResourceGroupName = resourceGroupName,
             });
 
-        KvEventSubscriptionAndGrantAccess(keyVault, functionApp, functionAppSourceControl, resourceGroup, secretNameParam, "SecretExpiry");
+        var eventSubscription = KvEventSubscriptionAndGrantAccess(keyVault, functionApp, functionAppSourceControl, resourceGroup, secretNameParam, "SecretExpiry");
+
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds();
+        _ = new Secret("secret",
+            new SecretArgs
+            {
+                ResourceGroupName = resourceGroup.Name,
+                SecretName = "storageKey",
+                VaultName = keyVault.Name,
+                Properties = new SecretPropertiesArgs
+                {
+                    Value = GetFirstStorageAccountKey(storageAccount, resourceGroupName),
+                    Attributes = new SecretAttributesArgs { Expires = (int)expiresAt },
+                },
+                Tags = { { "CredentialId", "key1" }, { "ProviderAddress", storageAccount.Id }, { "ValidityPeriodDays", "60" } },
+            },
+            new CustomResourceOptions { DependsOn = { eventSubscription } });
+
         StorageGrantAccess();
 
-        static void StorageGrantAccess()
+        void StorageGrantAccess()
         {
-            //TODO:
-            //        {
-            //            "type": "Microsoft.Storage/storageAccounts/providers/roleAssignments",
-            //                        "apiVersion": "2018-09-01-preview",
-            //                        "name": "[concat(parameters('storageAccountName'), '/Microsoft.Authorization/', guid(concat(parameters('storageAccountName'),reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')),'2019-08-01', 'Full').identity.principalId)))]",
-            //                        "properties": {
-            //        "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', '81a9662b-bebf-436f-a333-f67b29880f12')]",
-            //                            "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')),'2019-08-01', 'Full').identity.principalId]"
-            //                        }
-            //}
+            new RoleAssignment("functionAppAccessToStorage",
+                new RoleAssignmentArgs
+                {
+                    RoleAssignmentName = Guid.NewGuid().ToString(),
+                    Properties = new AzureNextGen.Authorization.Latest.Inputs.RoleAssignmentPropertiesArgs
+                    {
+                        PrincipalId = functionApp.Identity.Apply(f => f!.PrincipalId),
+                        RoleDefinitionId = "/subscriptions/1788357e-d506-4118-9f88-092c1dcddc16/providers/Microsoft.Authorization/roleDefinitions/81a9662b-bebf-436f-a333-f67b29880f12",
+                    },
+                    Scope = storageAccount.Id,
+                },
+                new CustomResourceOptions { DependsOn = { storageAccount, functionApp } });
+
         }
     }
 
-    private static void KvEventSubscriptionAndGrantAccess(Vault keyVault, WebApp functionApp, WebAppSourceControl functionAppSourceControl, ResourceGroup resourceGroup, string secretName, string topicName) // TODO: Consider moving this to a component
+    private static SystemTopicEventSubscription KvEventSubscriptionAndGrantAccess(Vault keyVault, WebApp functionApp, WebAppSourceControl functionAppSourceControl, ResourceGroup resourceGroup, string secretName, string topicName) // TODO: Consider moving this to a component
     {
         new Pulumi.Azure.KeyVault.AccessPolicy("accessPolicy",
             new Pulumi.Azure.KeyVault.AccessPolicyArgs
             {
-                ObjectId = functionApp.Identity.Apply(i => i.PrincipalId),
-                TenantId = functionApp.Identity.Apply(i => i.TenantId),    // TODO: use GetClientConfig?
+                ObjectId = functionApp.Identity.Apply(i => i!.PrincipalId),
+                TenantId = functionApp.Identity.Apply(i => i!.TenantId),    // TODO: use GetClientConfig?
                 SecretPermissions = { "get", "set", "list" },
                 KeyVaultId = keyVault.Id,
             });
@@ -261,5 +275,21 @@ class AppStack : Stack
                 },
             },
             new CustomResourceOptions { DependsOn = { functionAppSourceControl } });
+
+        return eventSubscription;
+    }
+
+    private static Output<string> GetFirstStorageAccountKey(StorageAccount storageAccount, string resourceGroupName)
+    {
+        return storageAccount.Name.Apply(s =>
+        {
+            return GetFirstStorageAccountKey(s, resourceGroupName);
+        });
+    }
+
+    private static Output<string> GetFirstStorageAccountKey(string storageAccountName, string resourceGroupName)
+    {
+        var keys = Output.Create(ListStorageAccountKeys.InvokeAsync(new ListStorageAccountKeysArgs { AccountName = storageAccountName, ResourceGroupName = resourceGroupName }));
+        return keys.Apply(k => k.Keys[0].Value);
     }
 }
