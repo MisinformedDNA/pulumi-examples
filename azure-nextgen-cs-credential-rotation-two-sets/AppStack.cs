@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Pulumi;
 using Pulumi.AzureNextGen.Authorization.Latest;
 using Pulumi.AzureNextGen.Authorization.Latest.Inputs;
@@ -37,8 +36,7 @@ internal class AppStack : Stack
 
     private static (Vault, ResourceGroup, StorageAccount, StorageAccount) AddInitalResources(string resourceGroupName, string? resourceNamePrefix, Output<string> tenantId)
     {
-        var location = "CentralUS";
-        var resourceGroup = new ResourceGroup("resourceGroup", new ResourceGroupArgs { ResourceGroupName = resourceGroupName, Location = location });
+        var resourceGroup = new ResourceGroup("resourceGroup", new ResourceGroupArgs { ResourceGroupName = resourceGroupName, Location = "CentralUS" });
 
         resourceNamePrefix ??= resourceGroupName;
 
@@ -46,7 +44,6 @@ internal class AppStack : Stack
         {
             AccountName = Output.Format($"{resourceNamePrefix}storage"),
             Kind = "Storage",
-            Location = location,
             ResourceGroupName = resourceGroup.Name,
             Sku = new StorageSkuArgs { Name = "Standard_LRS" },
         });
@@ -55,14 +52,12 @@ internal class AppStack : Stack
         {
             AccountName = Output.Format($"{resourceNamePrefix}storage2"),
             Kind = "Storage",
-            Location = location,
             ResourceGroupName = resourceGroup.Name,
             Sku = new StorageSkuArgs { Name = "Standard_LRS" },
         });
 
         var vault = new Vault("vault", new VaultArgs
         {
-            Location = location,
             Properties = new VaultPropertiesArgs
             {
                 AccessPolicies =
@@ -106,7 +101,6 @@ internal class AppStack : Stack
 
         var appInsights = new Component("appInsights", new ComponentArgs
         {
-            Location = resourceGroup.Location,
             RequestSource = "IbizaWebAppExtensionCreate",
             ResourceGroupName = resourceGroupName,
             ResourceName = functionAppName,
@@ -126,7 +120,6 @@ internal class AppStack : Stack
         var repoURL = config.Get("repoURL") ?? "https://github.com/Azure-Samples/KeyVault-Rotation-StorageAccountKey-PowerShell.git";
         var serverFarm = new AppServicePlan("appServicePlan", new AppServicePlanArgs
         {
-            Location = resourceGroup.Location,
             Name = $"{resourceGroupName}-rotation-fnapp-plan",
             ResourceGroupName = resourceGroupName,
             Sku = new SkuDescriptionArgs
@@ -139,7 +132,6 @@ internal class AppStack : Stack
         {
             AccountName = functionStorageAccountName,
             Kind = "Storage",
-            Location = resourceGroup.Location,
             ResourceGroupName = resourceGroupName,
             Sku = new StorageSkuArgs
             {
@@ -152,7 +144,6 @@ internal class AppStack : Stack
         {
             Enabled = true,
             Kind = "functionapp",
-            Location = resourceGroup.Location,
             Name = functionAppName,
             ResourceGroupName = resourceGroupName,
             ServerFarmId = serverFarm.Id,
@@ -265,7 +256,6 @@ internal class AppStack : Stack
                 SystemTopicName = topicName,
                 Source = keyVault.Id,
                 TopicType = "microsoft.keyvault.vaults",
-                Location = resourceGroup.Location,
                 ResourceGroupName = resourceGroup.Name,
             });
 
