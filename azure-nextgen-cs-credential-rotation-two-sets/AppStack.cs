@@ -20,7 +20,7 @@ using VaultSkuName = Pulumi.AzureNextGen.KeyVault.Latest.SkuName;
 
 internal class AppStack : Stack
 {
-    private const string DefaultResourceGroupName = "credrotate21";
+    private const string DefaultResourceGroupName = "credrotate2";
 
     public AppStack()
     {
@@ -65,7 +65,18 @@ internal class AppStack : Stack
             Location = location,
             Properties = new VaultPropertiesArgs
             {
-                AccessPolicies = new List<AccessPolicyEntryArgs>(0),
+                AccessPolicies =
+                {
+                    new AccessPolicyEntryArgs
+                    {
+                         ObjectId = Output.Create(GetClientConfig.InvokeAsync()).Apply(c => c.ObjectId),
+                         TenantId = tenantId,
+                         Permissions = new PermissionsArgs
+                         {
+                             Secrets = { SecretPermissions.Delete }
+                         }
+                    }
+                },
                 EnabledForDeployment = false,
                 EnabledForDiskEncryption = false,
                 EnabledForTemplateDeployment = false,
@@ -243,7 +254,7 @@ internal class AppStack : Stack
             new Pulumi.Azure.KeyVault.AccessPolicyArgs
             {
                 ObjectId = functionApp.Identity.Apply(i => i!.PrincipalId),
-                TenantId = functionApp.Identity.Apply(i => i!.TenantId),    // TODO: use GetClientConfig?
+                TenantId = functionApp.Identity.Apply(i => i!.TenantId),
                 SecretPermissions = { "get", "set", "list" },
                 KeyVaultId = keyVault.Id,
             });
